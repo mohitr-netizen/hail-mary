@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Hail Mary — Load Products</title>
+  <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f1ff; min-height: 100vh; padding: 40px 20px; }
+    .card { background: white; border-radius: 16px; padding: 32px; max-width: 640px; margin: 0 auto; box-shadow: 0px 12px 16px -4px rgba(16,24,40,0.08); }
+    h1 { font-size: 22px; font-weight: 700; color: #101828; margin-bottom: 4px; }
+    .sub { font-size: 14px; color: #475467; margin-bottom: 28px; }
+    label { font-size: 13px; font-weight: 600; color: #344054; display: block; margin-bottom: 6px; }
+    input[type="text"], input[type="file"] {
+      width: 100%; padding: 10px 14px; border: 1px solid #D0D5DD; border-radius: 8px;
+      font-size: 14px; margin-bottom: 16px; color: #101828;
+    }
+    input[type="file"] { padding: 8px; background: #fff; cursor: pointer; }
+    .btn {
+      background: #8863FB; color: white; border: none; border-radius: 10px;
+      padding: 12px 24px; font-size: 15px; font-weight: 600; cursor: pointer;
+      width: 100%; margin-top: 8px;
+    }
+    .btn:disabled { background: #C4B5FD; cursor: not-allowed; }
+    .log { margin-top: 24px; background: #F9FAFB; border-radius: 10px; padding: 16px; font-size: 13px; color: #344054; max-height: 320px; overflow-y: auto; line-height: 1.8; }
+    .log .ok   { color: #065F46; }
+    .log .err  { color: #CE1010; }
+    .log .info { color: #475467; }
+    .progress { height: 6px; background: #E5DDFF; border-radius: 999px; margin-top: 16px; overflow: hidden; }
+    .progress-bar { height: 100%; background: #8863FB; border-radius: 999px; width: 0%; transition: width 0.3s; }
+    .stats { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
+    .stat { background: #F5F1FF; border-radius: 10px; padding: 14px; text-align: center; }
+    .stat-num { font-size: 24px; font-weight: 700; color: #8863FB; }
+    .stat-label { font-size: 12px; color: #475467; margin-top: 2px; }
+  </style>
+</head>
+<body>
+<div class="card">
+  <h1>Load Products into Supabase</h1>
+  <p class="sub">One-time setup tool. Loads product details and barcode inventory from the .xls file.</p>
+
+  <label>Supabase URL</label>
+  <input type="text" id="supaUrl" placeholder="https://xxxx.supabase.co" />
+
+  <label>Supabase Anon Key</label>
+  <input type="text" id="supaKey" placeholder="eyJhbGci..." />
+
+  <label>Upload SKu and Barcode Data.xls</label>
+  <input type="file" id="xlsFile" accept=".xls,.xlsx" />
+
+  <button class="btn" id="loadBtn" onclick="startLoad()" disabled>Load into Supabase</button>
+
+  <div class="progress"><div class="progress-bar" id="progressBar"></div></div>
+
+  <div class="stats" id="stats" style="display:none">
+    <div class="stat"><div class="stat-num" id="statProducts">0</div><div class="stat-label">Products loaded</div></div>
+    <div class="stat"><div class="stat-num" id="statBarcodes">0</div><div class="stat-label">Barcodes loaded</div></div>
+  </div>
+
+  <div class="log" id="log"><span class="info">Select your .xls file to begin...</span></div>
+</div>
+
+<script>
+  var BATCH_SIZE = 100;
+  var db = null;
+
+  document.getElementById('xlsFile').addEventListener('change', function() {
+    var url = document.getElementById('supaUrl').value.trim();
+    var key = document.getElementById('supaKey').value.trim();
+    if (this.files.length > 0 && url && key) {
+      document.getElementById('loadBtn').disabled = false;
+    }
+  });
+
+  ['supaUrl', 'supaKey'].forEach(function(id) {
+    document.getElementById(id).addEventListener('input', function() {
+      var file = document.getElementById('xlsFile').files;
+      var url  = document.getElementById('supaUrl').value.trim();
+      var key  = document.getElementById('supaKey').value.trim();
+      document.getElementById('loadBtn').disabled = !(file.length > 0 && url && key);
+    });
+  });
+
+  function log(msg, type) {
+    var el = document.getElementById('log');
+    var line = document.createElement('div');
+    line.className = type || 'info';
+    line.textContent = msg;
+    el.appendChild(line);
+    el.scrollTop = el.scrollHeight;
+  }
+
+  function setProgress(pct) {
+    document.getElementById('progressBar').style.width = pct + '%';
+  }
+
+  async function startLoad() {
+    var url  = document.getElementById('supaUrl').value.trim();
+    var key  = document.getElementById('supaKey').value.trim();
+    var file = document.getElementById('xlsFile').files[0];
+    if (!url || !key || !file) return;
+
+    document.getElementById('loadBtn').disabled = true;
+    document.getElementById('log').innerHTML = '';
+    document.getElementById('stats').style.display = 'none';
+
+    db = supabase.createClient(url, key);
+
+    log('Reading .xls file...', 'info');
+    var data = await file.arrayBuffer();
+    var wb   = XLSX.read(data, { type: 'array' });
+
+    log('Sheets found: ' + wb.SheetNames.join(', '), 'info');
+
+    // -- Sheet 1: Barcodes
+    var barcodeSheet = wb.Sheets['Barcode + SKU details '] || wb.Sheets['Barcode + SKU details'] || wb.Sheets[wb.SheetNames[0]];
+    var barcodeRows  = XLSX.utils.sheet_to_json(barcodeSheet);
+    log('Barcode rows: ' + barcodeRows.length, 'info');
+
+    // -- Sheet 2: Products
+    var productSheet = wb.Sheets['SKu and Barcode Data'] || wb.Sheets[wb.SheetNames[1]];
+    var productRows  = XLSX.utils.sheet_to_json(productSheet);
+    log('Product rows: ' + productRows.length, 'info');
+
+    // === Load Products ===
+    log('--- Loading products ---', 'info');
+    var products = productRows.map(function(r) {
+      var metal = (r.metal || '').trim();
+      var type  = (r.jewellery_type || '').trim();
+      var name  = metal ? metal + ' ' + type : type;
+      if (r.gemstone) name += ' with ' + r.gemstone;
+      return {
+        sku:           (r.sku || '').trim(),
+        display_name:  name,
+        weight:        r.weight || null,
+        price:         r.price || null,
+        special_price: r.special_price || null,
+        size:          r.size ? String(r.size) : null,
+        metal:         metal || null,
+        diamond:       r.diamond || null,
+        jewellery_type: type || null,
+        gender:        r.gender || null,
+        gemstone:      r.gemstone || null,
+        metal_weight1: r.metal_weight1 || null,
+        diamond_pieces: r.diamond_pieces ? parseInt(r.diamond_pieces) : null,
+        diamond_weight: r.diamond_weight || null
+      };
+    }).filter(function(p) { return p.sku; });
+
+    var prodLoaded = 0;
+    var prodErrors = 0;
+    var totalBatches = Math.ceil(products.length / BATCH_SIZE);
+
+    for (var i = 0; i < products.length; i += BATCH_SIZE) {
+      var batch = products.slice(i, i + BATCH_SIZE);
+      var res = await db.from('products').upsert(batch, { onConflict: 'sku' });
+      if (res.error) {
+        log('Product batch error: ' + res.error.message, 'err');
+        prodErrors += batch.length;
+      } else {
+        prodLoaded += batch.length;
+        log('Products: ' + prodLoaded + ' / ' + products.length, 'ok');
+      }
+      setProgress((prodLoaded / (products.length + barcodeRows.length)) * 100);
+    }
+
+    // === Load Barcodes ===
+    log('--- Loading barcodes ---', 'info');
+    var barcodes = barcodeRows.map(function(r) {
+      return {
+        barcode:    (r['Barcode'] || r['barcode'] || '').trim(),
+        sku:        (r['Sku'] || r['sku'] || '').trim(),
+        store_slug: 'dallas',
+        status:     'available'
+      };
+    }).filter(function(b) { return b.barcode && b.sku; });
+
+    var bcLoaded = 0;
+    var bcErrors = 0;
+
+    for (var j = 0; j < barcodes.length; j += BATCH_SIZE) {
+      var bcBatch = barcodes.slice(j, j + BATCH_SIZE);
+      var bcRes = await db.from('barcodes').upsert(bcBatch, { onConflict: 'barcode' });
+      if (bcRes.error) {
+        log('Barcode batch error: ' + bcRes.error.message, 'err');
+        bcErrors += bcBatch.length;
+      } else {
+        bcLoaded += bcBatch.length;
+        log('Barcodes: ' + bcLoaded + ' / ' + barcodes.length, 'ok');
+      }
+      setProgress(((prodLoaded + bcLoaded) / (products.length + barcodes.length)) * 100);
+    }
+
+    // === Done ===
+    setProgress(100);
+    log('--- Complete ---', 'info');
+    log('Products loaded: ' + prodLoaded + (prodErrors ? ' (' + prodErrors + ' errors)' : ''), prodErrors ? 'err' : 'ok');
+    log('Barcodes loaded: ' + bcLoaded + (bcErrors ? ' (' + bcErrors + ' errors)' : ''), bcErrors ? 'err' : 'ok');
+
+    document.getElementById('stats').style.display = 'grid';
+    document.getElementById('statProducts').textContent = prodLoaded;
+    document.getElementById('statBarcodes').textContent = bcLoaded;
+    document.getElementById('loadBtn').disabled = false;
+  }
+</script>
+</body>
+</html>
