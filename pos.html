@@ -476,29 +476,8 @@
   <div class="page-body">
     <div class="card-title" style="margin-bottom:12px;">Search Product</div>
 
-    <!-- Scan zone — hardware ring scanner only (HID keyboard input) -->
-    <div id="scan-zone" onclick="focusScanInput()" style="
-      background: var(--purple-15); border: 2px dashed var(--purple-30);
-      border-radius: 14px; padding: 14px 16px; text-align: center;
-      cursor: pointer; margin-bottom: 14px; transition: border-color 0.15s;
-    ">
-      <div style="font-size: 22px; margin-bottom: 4px;">🔫</div>
-      <div style="font-size: 14px; font-weight: 600; color: var(--brand-dark);">Tap here · then scan with ring scanner</div>
-      <div style="font-size: 11px; color: var(--gray-600); margin-top: 2px;" id="scan-status">Ready to scan</div>
-      <input type="text" id="scan-input" autocomplete="off"
-        style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;"
-        onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; this.value=''; doSearch(); }"
-        oninput="handleScanInput(this)" />
-    </div>
-
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
-      <div style="flex:1;height:1px;background:var(--purple-20);"></div>
-      <span style="font-size:12px;color:var(--neutral-40);font-weight:600;">OR SEARCH BY SKU</span>
-      <div style="flex:1;height:1px;background:var(--purple-20);"></div>
-    </div>
-
     <div class="search-bar-wrap">
-      <input type="text" id="search-input" placeholder="Type partial SKU e.g. JRI033..." autofocus autocomplete="off" onkeydown="if(event.key==='Enter') doSearch()" />
+      <input type="text" id="search-input" placeholder="SKU or barcode..." autofocus autocomplete="off" onkeydown="if(event.key==='Enter') doSearch()" />
       <button class="btn btn-primary" style="width:auto;min-width:80px;" onclick="doSearch()">
         <span id="search-btn-text">Search</span>
       </button>
