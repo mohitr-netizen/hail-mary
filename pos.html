@@ -926,14 +926,23 @@ function addToCart() {
 function doAddToCart() {
   var p = currentProduct;
   if (!p) return;
-  cart.push({
-    sku:         p.sku,
-    barcode:     p._scannedBarcode || null,
-    displayName: p.display_name || p.sku,
-    price:       p.special_price || 0,
-    isGoldCoin:  false,
-    isFree:      false
-  });
+
+  // If same SKU already in cart, increment qty
+  var existing = cart.find(function(i) { return !i.isGoldCoin && i.sku === p.sku; });
+  if (existing) {
+    existing.qty += 1;
+    existing.barcodes.push(p._scannedBarcode || null);
+  } else {
+    cart.push({
+      sku:         p.sku,
+      displayName: p.display_name || p.sku,
+      price:       p.special_price || 0,
+      qty:         1,
+      barcodes:    [p._scannedBarcode || null],
+      isGoldCoin:  false,
+      isFree:      false
+    });
+  }
   showToast('Added to cart', 'success');
   updateCartCount();
   setTimeout(function() { showScreen('cart'); renderCart(); loadBarcodeOptions(); }, 200);
@@ -1012,7 +1021,7 @@ function renderCart() {
 function recalcTotals() {
   // Calc subtotal (non-coin items only)
   var nonCoins = cart.filter(function(i) { return !i.isGoldCoin; });
-  var subtotal = nonCoins.reduce(function(s, i) { return s + i.price; }, 0);
+  var subtotal = nonCoins.reduce(function(s, i) { return s + (i.price * i.qty); }, 0);
 
   // Discounts
   var bdayVal  = document.getElementById('bday-input').value.trim();
@@ -1022,12 +1031,17 @@ function recalcTotals() {
 
   var postDiscount = Math.max(0, subtotal - bdayDisc - annivDisc);
 
-  // Gold coins
+  // Gold coins — single row, qty updates
   var coinsNeeded = Math.floor(postDiscount / COIN_THRESHOLD);
-  // Sync coin rows in cart
-  cart = cart.filter(function(i) { return !i.isGoldCoin; });
-  for (var c = 0; c < coinsNeeded; c++) {
-    cart.push({ sku: GOLD_COIN_SKU, barcode: null, displayName: '0.20g Gold Coin', price: GOLD_COIN_PRICE, isGoldCoin: true, isFree: true });
+  var coinRow = cart.find(function(i) { return i.isGoldCoin; });
+  if (coinsNeeded > 0) {
+    if (coinRow) {
+      coinRow.qty = coinsNeeded;
+    } else {
+      cart.push({ sku: GOLD_COIN_SKU, displayName: '0.20g Gold Coin', price: GOLD_COIN_PRICE, qty: coinsNeeded, barcodes: [], isGoldCoin: true, isFree: true });
+    }
+  } else {
+    cart = cart.filter(function(i) { return !i.isGoldCoin; });
   }
 
   var coinValue = coinsNeeded * GOLD_COIN_PRICE;
@@ -1077,19 +1091,42 @@ function recalcTotals() {
 
 function renderCartItem(item, idx) {
   var coinClass = item.isGoldCoin ? ' gold-coin' : '';
-  var removeBtn = item.isGoldCoin ? '' : '<button class="cart-item-remove" onclick="removeCartItem(' + idx + ')">×</button>';
-  var priceEl   = item.isFree ?
-    '<div class="cart-item-free">FREE GIFT</div><div style="font-size:11px;color:var(--neutral-40);text-align:right;">$' + item.price.toFixed(2) + '</div>' :
-    '<div class="cart-item-price">$' + item.price.toFixed(2) + '</div>';
+  var totalPrice = item.price * item.qty;
 
+  var priceEl = item.isFree
+    ? '<div class="cart-item-free">FREE GIFT</div>'
+    : '<div class="cart-item-price">$' + totalPrice.toFixed(2) + '</div>' +
+      (item.qty > 1 ? '<div style="font-size:10px;color:var(--gray-600);text-align:right;">$' + item.price.toFixed(2) + ' × ' + item.qty + '</div>' : '');
+
+  // Qty controls
+  var qtyEl = item.isGoldCoin
+    ? '<div style="display:flex;align-items:center;gap:6px;margin-left:auto;">' +
+        '<span style="background:var(--purple-20);color:var(--purple-100);font-size:12px;font-weight:700;padding:3px 10px;border-radius:20px;">×' + item.qty + '</span>' +
+      '</div>'
+    : '<div style="display:flex;align-items:center;gap:4px;">' +
+        '<button onclick="changeQty(' + idx + ',-1)" style="width:28px;height:28px;border-radius:8px;border:1.5px solid var(--purple-30);background:white;color:var(--brand-dark);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">−</button>' +
+        '<span style="font-size:15px;font-weight:700;color:var(--brand-dark);min-width:20px;text-align:center;">' + item.qty + '</span>' +
+        '<button onclick="changeQty(' + idx + ',1)" style="width:28px;height:28px;border-radius:8px;border:1.5px solid var(--purple-30);background:white;color:var(--brand-dark);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">+</button>' +
+      '</div>';
+
+  var removeBtn = item.isGoldCoin ? '' :
+    '<button class="cart-item-remove" onclick="removeCartItem(' + idx + ')" title="Remove">×</button>';
+
+  // Barcode selectors — one per unit, only for non-coin items
   var barcodeEl = '';
   if (!item.isGoldCoin) {
-    barcodeEl = '<div class="barcode-selector">' +
-      '<label style="font-size:11px;color:var(--gray-600);margin-bottom:4px;">Barcode (physical item)</label>' +
-      '<select id="bc-sel-' + idx + '" onchange="setBarcodeForItem(' + idx + ', this.value)">' +
-      '<option value="">Loading barcodes...</option>' +
-      '</select>' +
+    var bcRows = '';
+    for (var u = 0; u < item.qty; u++) {
+      bcRows += '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;">' +
+        '<span style="font-size:11px;color:var(--gray-600);white-space:nowrap;min-width:40px;">Unit ' + (u + 1) + '</span>' +
+        '<select id="bc-sel-' + idx + '-' + u + '" onchange="setBarcodeForUnit(' + idx + ',' + u + ',this.value)" style="flex:1;height:36px;font-size:12px;background:var(--input-bg);border:1.5px solid transparent;border-radius:10px;padding:0 10px;">' +
+          '<option value="">Loading...</option>' +
+        '</select>' +
       '</div>';
+    }
+    barcodeEl = '<div class="barcode-selector" style="margin-top:10px;">' +
+      '<div style="font-size:11px;font-weight:600;color:var(--gray-600);margin-bottom:2px;">Barcode (physical item' + (item.qty > 1 ? 's' : '') + ')</div>' +
+      bcRows + '</div>';
   }
 
   return '<div class="cart-item' + coinClass + '" id="cart-item-' + idx + '">' +
@@ -1098,25 +1135,41 @@ function renderCartItem(item, idx) {
       '<div class="cart-item-info">' +
         '<div class="cart-item-name">' + item.displayName + '</div>' +
         '<div class="cart-item-sku">' + item.sku + '</div>' +
+        '<div style="margin-top:6px;">' + qtyEl + '</div>' +
       '</div>' +
-      '<div>' + priceEl + '</div>' +
-      removeBtn +
+      '<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">' +
+        priceEl + removeBtn +
+      '</div>' +
     '</div>' +
     barcodeEl +
     '</div>';
 }
 
-function removeCartItem(idx) {
-  cart.splice(idx, 1);
-  recalcTotals();
+function changeQty(idx, delta) {
+  var item = cart[idx];
+  if (!item || item.isGoldCoin) return;
+  var newQty = item.qty + delta;
+  if (newQty < 1) { removeCartItem(idx); return; }
+  item.qty = newQty;
+  // Resize barcodes array
+  while (item.barcodes.length < newQty) item.barcodes.push(null);
+  while (item.barcodes.length > newQty) item.barcodes.pop();
+  renderCart();
+  loadBarcodeOptions();
 }
 
-function setBarcodeForItem(idx, barcode) {
-  if (cart[idx]) cart[idx].barcode = barcode;
+function removeCartItem(idx) {
+  cart.splice(idx, 1);
+  renderCart();
+  loadBarcodeOptions();
+}
+
+function setBarcodeForUnit(idx, unit, barcode) {
+  if (cart[idx]) cart[idx].barcodes[unit] = barcode;
 }
 
 function updateCartCount() {
-  var count = cart.filter(function(i) { return !i.isGoldCoin; }).length;
+  var count = cart.filter(function(i) { return !i.isGoldCoin; }).reduce(function(s, i) { return s + i.qty; }, 0);
   ['cart-count', 'pdp-cart-count'].forEach(function(id) {
     var el = document.getElementById(id);
     if (!el) return;
@@ -1130,8 +1183,7 @@ async function loadBarcodeOptions() {
   var nonCoins = cart.filter(function(i) { return !i.isGoldCoin; });
   if (!nonCoins.length) return;
 
-  // One query for all SKUs in cart
-  var skus = [...new Set(nonCoins.map(function(i) { return i.sku; }))];
+  var skus = Array.from(new Set(nonCoins.map(function(i) { return i.sku; })));
   var res = await db.from('barcodes').select('barcode,sku')
     .in('sku', skus)
     .eq('store_slug', session.storeSlug || 'dallas')
@@ -1144,20 +1196,32 @@ async function loadBarcodeOptions() {
     bySKU[b.sku].push(b.barcode);
   });
 
-  // Populate each dropdown
+  // Populate per-unit dropdowns
   nonCoins.forEach(function(item) {
     var cartIdx = cart.indexOf(item);
-    var sel = document.getElementById('bc-sel-' + cartIdx);
-    if (!sel) return;
     var options = bySKU[item.sku] || [];
-    if (options.length > 0) {
-      sel.innerHTML = '<option value="">Select barcode...</option>' +
-        options.map(function(bc) {
-          return '<option value="' + bc + '"' + (item.barcode === bc ? ' selected' : '') + '>' + bc + '</option>';
-        }).join('');
-      if (item.barcode) sel.value = item.barcode;
-    } else {
-      sel.outerHTML = '<input type="text" id="bc-sel-' + cartIdx + '" placeholder="Enter barcode manually" value="' + (item.barcode || '') + '" onchange="setBarcodeForItem(' + cartIdx + ', this.value)" style="height:40px;font-size:13px;width:100%;background:var(--input-bg);border:1.5px solid transparent;border-radius:12px;padding:0 14px;font-family:Inter,sans-serif;" />';
+
+    for (var u = 0; u < item.qty; u++) {
+      var sel = document.getElementById('bc-sel-' + cartIdx + '-' + u);
+      if (!sel) continue;
+      var selectedVal = item.barcodes[u] || '';
+
+      // Exclude barcodes already selected in other units of this item
+      var usedInOtherUnits = item.barcodes.filter(function(b, i) { return b && i !== u; });
+      var available = options.filter(function(bc) { return !usedInOtherUnits.includes(bc); });
+
+      if (available.length > 0) {
+        sel.innerHTML = '<option value="">Select barcode...</option>' +
+          available.map(function(bc) {
+            return '<option value="' + bc + '"' + (selectedVal === bc ? ' selected' : '') + '>' + bc + '</option>';
+          }).join('');
+      } else {
+        // Fallback: manual text input
+        var inputId = 'bc-sel-' + cartIdx + '-' + u;
+        sel.outerHTML = '<input type="text" id="' + inputId + '" placeholder="Enter barcode manually" value="' + selectedVal + '" ' +
+          'onchange="setBarcodeForUnit(' + cartIdx + ',' + u + ',this.value)" ' +
+          'style="flex:1;height:36px;font-size:12px;background:var(--input-bg);border:1.5px solid transparent;border-radius:10px;padding:0 10px;font-family:Inter,sans-serif;" />';
+      }
     }
   });
 }
@@ -1169,10 +1233,14 @@ function proceedToPayment() {
   if (!customer) { showToast('Customer details required', 'error'); openCustomerModal(false); return; }
   if (cart.filter(function(i) { return !i.isGoldCoin; }).length === 0) { showToast('Cart is empty', 'error'); return; }
 
-  // Check barcode selection
+  // Check barcode selection — every unit must have a barcode
   var nonCoins = cart.filter(function(i) { return !i.isGoldCoin; });
   for (var i = 0; i < nonCoins.length; i++) {
-    if (!nonCoins[i].barcode) { showToast('Select barcode for all items', 'error'); return; }
+    var item = nonCoins[i];
+    var missing = item.barcodes.filter(function(b) { return !b; }).length;
+    if (missing > 0) {
+      showToast('Select barcode for all units of ' + item.displayName, 'error'); return;
+    }
   }
 
   // Sync bday/anniv from inputs
@@ -1188,7 +1256,9 @@ function renderPaymentSummary() {
   var el = document.getElementById('pay-summary');
   var rows = '';
   cart.forEach(function(item) {
-    rows += '<div class="order-summary-row"><span>' + item.displayName + (item.isFree ? ' (Free)' : '') + '</span><span>$' + (item.isFree ? '0.00' : item.price.toFixed(2)) + '</span></div>';
+    var lineLabel = item.displayName + (item.qty > 1 ? ' ×' + item.qty : '') + (item.isFree ? ' (Free)' : '');
+    var lineAmt   = item.isFree ? '$0.00' : '$' + (item.price * item.qty).toFixed(2);
+    rows += '<div class="order-summary-row"><span>' + lineLabel + '</span><span>' + lineAmt + '</span></div>';
   });
   if (t.bdayDisc)  rows += '<div class="order-summary-row"><span>Birthday Discount</span><span style="color:var(--success)">−$' + t.bdayDisc.toFixed(2) + '</span></div>';
   if (t.annivDisc) rows += '<div class="order-summary-row"><span>Anniversary Discount</span><span style="color:var(--success)">−$' + t.annivDisc.toFixed(2) + '</span></div>';
@@ -1265,25 +1335,47 @@ async function placeOrder() {
     if (orderRes.error) throw new Error(orderRes.error.message);
     var orderId = orderRes.data.id;
 
-    // Insert line items
-    var itemPayloads = cart.map(function(item) {
-      return {
-        order_id:     orderId,
-        sku:          item.sku,
-        barcode:      item.barcode || null,
-        display_name: item.displayName,
-        qty:          1,
-        unit_price:   item.price,
-        amount:       item.isFree ? 0 : item.price,
-        is_gold_coin: item.isGoldCoin,
-        is_free:      item.isFree
-      };
+    // Insert line items — one row per unit (qty expanded)
+    var itemPayloads = [];
+    cart.forEach(function(item) {
+      if (item.isGoldCoin) {
+        // Gold coin: single row with qty
+        itemPayloads.push({
+          order_id:     orderId,
+          sku:          item.sku,
+          barcode:      null,
+          display_name: item.displayName,
+          qty:          item.qty,
+          unit_price:   item.price,
+          amount:       0,
+          is_gold_coin: true,
+          is_free:      true
+        });
+      } else {
+        // Regular items: one row per unit with its barcode
+        for (var u = 0; u < item.qty; u++) {
+          itemPayloads.push({
+            order_id:     orderId,
+            sku:          item.sku,
+            barcode:      item.barcodes[u] || null,
+            display_name: item.displayName,
+            qty:          1,
+            unit_price:   item.price,
+            amount:       item.price,
+            is_gold_coin: false,
+            is_free:      false
+          });
+        }
+      }
     });
     var itemsRes = await db.from('hm_order_items').insert(itemPayloads);
     if (itemsRes.error) throw new Error(itemsRes.error.message);
 
-    // Mark barcodes as sold
-    var soldBarcodes = cart.filter(function(i) { return i.barcode && !i.isGoldCoin; }).map(function(i) { return i.barcode; });
+    // Mark all sold barcodes
+    var soldBarcodes = [];
+    cart.filter(function(i) { return !i.isGoldCoin; }).forEach(function(i) {
+      i.barcodes.forEach(function(b) { if (b) soldBarcodes.push(b); });
+    });
     for (var b = 0; b < soldBarcodes.length; b++) {
       await db.from('barcodes').update({ status: 'sold', sold_order_no: orderNo }).eq('barcode', soldBarcodes[b]);
     }
@@ -1310,13 +1402,15 @@ function renderInvoice(orderNo, order, items, cust, storeData, date) {
   var invoiceNo = 'INV' + orderNo.replace('HM-', '').replace(/-/g, '');
 
   var rows = items.map(function(item, i) {
+    var barcodeDisplay = item.isGoldCoin ? '—' : (item.barcodes || []).filter(Boolean).join(', ') || '—';
+    var lineAmt = item.isFree ? 'Free' : '$' + (item.price * item.qty).toFixed(2);
     return '<tr>' +
       '<td>' + (i + 1) + '</td>' +
       '<td>' + item.displayName + '</td>' +
-      '<td>' + (item.barcode || '—') + '</td>' +
-      '<td class="num">1</td>' +
+      '<td>' + barcodeDisplay + '</td>' +
+      '<td class="num">' + item.qty + '</td>' +
       '<td class="num">$' + item.price.toFixed(2) + '</td>' +
-      '<td class="num">' + (item.isFree ? 'Free' : '$' + item.price.toFixed(2)) + '</td>' +
+      '<td class="num">' + lineAmt + '</td>' +
       '</tr>';
   }).join('');
 
