@@ -476,15 +476,15 @@
   <div class="page-body">
     <div class="card-title" style="margin-bottom:12px;">Search Product</div>
 
-    <!-- Scan zone -->
+    <!-- Scan zone — hardware ring scanner only (HID keyboard input) -->
     <div id="scan-zone" onclick="focusScanInput()" style="
       background: var(--purple-15); border: 2px dashed var(--purple-30);
-      border-radius: 14px; padding: 18px 16px; text-align: center;
+      border-radius: 14px; padding: 14px 16px; text-align: center;
       cursor: pointer; margin-bottom: 14px; transition: border-color 0.15s;
     ">
-      <div style="font-size: 28px; margin-bottom: 6px;">📷</div>
-      <div style="font-size: 14px; font-weight: 600; color: var(--brand-dark);">Scan QR / Barcode</div>
-      <div style="font-size: 12px; color: var(--gray-600); margin-top: 3px;">Tap here and scan with device camera or ring scanner</div>
+      <div style="font-size: 22px; margin-bottom: 4px;">🔫</div>
+      <div style="font-size: 14px; font-weight: 600; color: var(--brand-dark);">Tap here · then scan with ring scanner</div>
+      <div style="font-size: 11px; color: var(--gray-600); margin-top: 2px;" id="scan-status">Ready to scan</div>
       <input type="text" id="scan-input" autocomplete="off"
         style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;"
         onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; this.value=''; doSearch(); }"
@@ -822,6 +822,7 @@ function focusScanInput() {
   el.focus();
   document.getElementById('scan-zone').style.borderColor = 'var(--purple-100)';
   document.getElementById('scan-zone').style.background  = 'var(--purple-20)';
+  document.getElementById('scan-status').textContent = 'Listening... scan now';
 }
 
 var scanBuffer = ''; var scanTimer;
