@@ -945,7 +945,7 @@ function doAddToCart() {
   }
   showToast('Added to cart', 'success');
   updateCartCount();
-  setTimeout(function() { showScreen('cart'); renderCart(); loadBarcodeOptions(); }, 200);
+  setTimeout(function() { showScreen('cart'); renderCart(); }, 200);
 }
 
 function addMoreItem() {
@@ -1011,11 +1011,27 @@ function renderCustomerPill() {
 // ═══════════════════════════════════════════════════
 // CART RENDERING
 // ═══════════════════════════════════════════════════
-function renderCart() {
+async function renderCart() {
   renderCustomerPill();
+  // Pre-fetch all barcodes first, then render with data already available
+  await prefetchBarcodes();
   recalcTotals();
   updateCartCount();
-  loadBarcodeOptions();
+}
+
+async function prefetchBarcodes() {
+  var nonCoins = cart.filter(function(i) { return !i.isGoldCoin; });
+  window._barcodeCache = {};
+  if (!nonCoins.length) return;
+  var skus = Array.from(new Set(nonCoins.map(function(i) { return i.sku; })));
+  var res = await db.from('barcodes').select('barcode,sku')
+    .in('sku', skus)
+    .eq('store_slug', session.storeSlug || 'dallas')
+    .eq('status', 'available');
+  (res.data || []).forEach(function(b) {
+    if (!window._barcodeCache[b.sku]) window._barcodeCache[b.sku] = [];
+    window._barcodeCache[b.sku].push(b.barcode);
+  });
 }
 
 function recalcTotals() {
@@ -1112,17 +1128,35 @@ function renderCartItem(item, idx) {
   var removeBtn = item.isGoldCoin ? '' :
     '<button class="cart-item-remove" onclick="removeCartItem(' + idx + ')" title="Remove">×</button>';
 
-  // Barcode selectors — one per unit, only for non-coin items
+  // Barcode selectors — baked in from cache, no async needed
   var barcodeEl = '';
   if (!item.isGoldCoin) {
+    var allOptions = (window._barcodeCache || {})[item.sku] || [];
     var bcRows = '';
     for (var u = 0; u < item.qty; u++) {
-      bcRows += '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;">' +
-        '<span style="font-size:11px;color:var(--gray-600);white-space:nowrap;min-width:40px;">Unit ' + (u + 1) + '</span>' +
-        '<select id="bc-sel-' + idx + '-' + u + '" onchange="setBarcodeForUnit(' + idx + ',' + u + ',this.value)" style="flex:1;height:36px;font-size:12px;background:var(--input-bg);border:1.5px solid transparent;border-radius:10px;padding:0 10px;">' +
-          '<option value="">Loading...</option>' +
-        '</select>' +
-      '</div>';
+      var selectedVal = item.barcodes[u] || '';
+      var usedElsewhere = item.barcodes.filter(function(b, i) { return b && i !== u; });
+      var available = allOptions.filter(function(bc) { return usedElsewhere.indexOf(bc) === -1; });
+      var optionsHtml = '<option value="">Select barcode...</option>' +
+        available.map(function(bc) {
+          return '<option value="' + bc + '"' + (selectedVal === bc ? ' selected' : '') + '>' + bc + '</option>';
+        }).join('');
+      if (available.length === 0) {
+        // No barcodes in DB — show text input
+        bcRows += '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;">' +
+          (item.qty > 1 ? '<span style="font-size:11px;color:var(--gray-600);white-space:nowrap;min-width:40px;">Unit ' + (u+1) + '</span>' : '') +
+          '<input type="text" id="bc-sel-' + idx + '-' + u + '" placeholder="Enter barcode manually" value="' + selectedVal + '" ' +
+            'onchange="setBarcodeForUnit(' + idx + ',' + u + ',this.value)" ' +
+            'style="flex:1;height:36px;font-size:12px;background:var(--input-bg);border:1.5px solid transparent;border-radius:10px;padding:0 10px;font-family:Inter,sans-serif;" />' +
+          '</div>';
+      } else {
+        bcRows += '<div style="display:flex;align-items:center;gap:8px;margin-top:6px;">' +
+          (item.qty > 1 ? '<span style="font-size:11px;color:var(--gray-600);white-space:nowrap;min-width:40px;">Unit ' + (u+1) + '</span>' : '') +
+          '<select id="bc-sel-' + idx + '-' + u + '" onchange="setBarcodeForUnit(' + idx + ',' + u + ',this.value)" style="flex:1;height:36px;font-size:12px;background:var(--input-bg);border:1.5px solid transparent;border-radius:10px;padding:0 10px;">' +
+            optionsHtml +
+          '</select>' +
+          '</div>';
+      }
     }
     barcodeEl = '<div class="barcode-selector" style="margin-top:10px;">' +
       '<div style="font-size:11px;font-weight:600;color:var(--gray-600);margin-bottom:2px;">Barcode (physical item' + (item.qty > 1 ? 's' : '') + ')</div>' +
@@ -1155,13 +1189,11 @@ function changeQty(idx, delta) {
   while (item.barcodes.length < newQty) item.barcodes.push(null);
   while (item.barcodes.length > newQty) item.barcodes.pop();
   renderCart();
-  loadBarcodeOptions();
 }
 
 function removeCartItem(idx) {
   cart.splice(idx, 1);
   renderCart();
-  loadBarcodeOptions();
 }
 
 function setBarcodeForUnit(idx, unit, barcode) {
@@ -1178,53 +1210,6 @@ function updateCartCount() {
   });
 }
 
-// Load barcode dropdowns — single query for all cart SKUs
-async function loadBarcodeOptions() {
-  var nonCoins = cart.filter(function(i) { return !i.isGoldCoin; });
-  if (!nonCoins.length) return;
-
-  var skus = Array.from(new Set(nonCoins.map(function(i) { return i.sku; })));
-  var res = await db.from('barcodes').select('barcode,sku')
-    .in('sku', skus)
-    .eq('store_slug', session.storeSlug || 'dallas')
-    .eq('status', 'available');
-
-  // Group by SKU
-  var bySKU = {};
-  (res.data || []).forEach(function(b) {
-    if (!bySKU[b.sku]) bySKU[b.sku] = [];
-    bySKU[b.sku].push(b.barcode);
-  });
-
-  // Populate per-unit dropdowns
-  nonCoins.forEach(function(item) {
-    var cartIdx = cart.indexOf(item);
-    var options = bySKU[item.sku] || [];
-
-    for (var u = 0; u < item.qty; u++) {
-      var sel = document.getElementById('bc-sel-' + cartIdx + '-' + u);
-      if (!sel) continue;
-      var selectedVal = item.barcodes[u] || '';
-
-      // Exclude barcodes already selected in other units of this item
-      var usedInOtherUnits = item.barcodes.filter(function(b, i) { return b && i !== u; });
-      var available = options.filter(function(bc) { return !usedInOtherUnits.includes(bc); });
-
-      if (available.length > 0) {
-        sel.innerHTML = '<option value="">Select barcode...</option>' +
-          available.map(function(bc) {
-            return '<option value="' + bc + '"' + (selectedVal === bc ? ' selected' : '') + '>' + bc + '</option>';
-          }).join('');
-      } else {
-        // Fallback: manual text input
-        var inputId = 'bc-sel-' + cartIdx + '-' + u;
-        sel.outerHTML = '<input type="text" id="' + inputId + '" placeholder="Enter barcode manually" value="' + selectedVal + '" ' +
-          'onchange="setBarcodeForUnit(' + cartIdx + ',' + u + ',this.value)" ' +
-          'style="flex:1;height:36px;font-size:12px;background:var(--input-bg);border:1.5px solid transparent;border-radius:10px;padding:0 10px;font-family:Inter,sans-serif;" />';
-      }
-    }
-  });
-}
 
 // ═══════════════════════════════════════════════════
 // PROCEED TO PAYMENT
