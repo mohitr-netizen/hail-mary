@@ -936,8 +936,7 @@ function doAddToCart() {
   });
   showToast('Added to cart', 'success');
   updateCartCount();
-  loadBarcodeOptions();
-  setTimeout(function() { showScreen('cart'); renderCart(); }, 600);
+  setTimeout(function() { showScreen('cart'); renderCart(); loadBarcodeOptions(); }, 200);
 }
 
 function addMoreItem() {
@@ -1007,6 +1006,7 @@ function renderCart() {
   renderCustomerPill();
   recalcTotals();
   updateCartCount();
+  loadBarcodeOptions();
 }
 
 function recalcTotals() {
@@ -1125,32 +1125,41 @@ function updateCartCount() {
   });
 }
 
-// Load barcode dropdowns for all non-coin cart items
+// Load barcode dropdowns — single query for all cart SKUs
 async function loadBarcodeOptions() {
   var nonCoins = cart.filter(function(i) { return !i.isGoldCoin; });
-  for (var i = 0; i < nonCoins.length; i++) {
-    var item = nonCoins[i];
+  if (!nonCoins.length) return;
+
+  // One query for all SKUs in cart
+  var skus = [...new Set(nonCoins.map(function(i) { return i.sku; }))];
+  var res = await db.from('barcodes').select('barcode,sku')
+    .in('sku', skus)
+    .eq('store_slug', session.storeSlug || 'dallas')
+    .eq('status', 'available');
+
+  // Group by SKU
+  var bySKU = {};
+  (res.data || []).forEach(function(b) {
+    if (!bySKU[b.sku]) bySKU[b.sku] = [];
+    bySKU[b.sku].push(b.barcode);
+  });
+
+  // Populate each dropdown
+  nonCoins.forEach(function(item) {
     var cartIdx = cart.indexOf(item);
     var sel = document.getElementById('bc-sel-' + cartIdx);
-    if (!sel) continue;
-
-    var res = await db.from('barcodes').select('barcode')
-      .eq('sku', item.sku)
-      .eq('store_slug', session.storeSlug || 'dallas')
-      .eq('status', 'available');
-
-    if (res.data && res.data.length > 0) {
+    if (!sel) return;
+    var options = bySKU[item.sku] || [];
+    if (options.length > 0) {
       sel.innerHTML = '<option value="">Select barcode...</option>' +
-        res.data.map(function(b) {
-          var preSelected = item.barcode === b.barcode;
-          return '<option value="' + b.barcode + '"' + (preSelected ? ' selected' : '') + '>' + b.barcode + '</option>';
+        options.map(function(bc) {
+          return '<option value="' + bc + '"' + (item.barcode === bc ? ' selected' : '') + '>' + bc + '</option>';
         }).join('');
       if (item.barcode) sel.value = item.barcode;
     } else {
-      // Fallback to text input
-      sel.outerHTML = '<input type="text" id="bc-sel-' + cartIdx + '" placeholder="Enter barcode manually" value="' + (item.barcode || '') + '" onchange="setBarcodeForItem(' + cartIdx + ', this.value)" style="height:40px;font-size:13px;" />';
+      sel.outerHTML = '<input type="text" id="bc-sel-' + cartIdx + '" placeholder="Enter barcode manually" value="' + (item.barcode || '') + '" onchange="setBarcodeForItem(' + cartIdx + ', this.value)" style="height:40px;font-size:13px;width:100%;background:var(--input-bg);border:1.5px solid transparent;border-radius:12px;padding:0 14px;font-family:Inter,sans-serif;" />';
     }
-  }
+  });
 }
 
 // ═══════════════════════════════════════════════════
