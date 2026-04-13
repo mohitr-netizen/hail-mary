@@ -475,8 +475,30 @@
   </div>
   <div class="page-body">
     <div class="card-title" style="margin-bottom:12px;">Search Product</div>
+
+    <!-- Scan zone -->
+    <div id="scan-zone" onclick="focusScanInput()" style="
+      background: var(--purple-15); border: 2px dashed var(--purple-30);
+      border-radius: 14px; padding: 18px 16px; text-align: center;
+      cursor: pointer; margin-bottom: 14px; transition: border-color 0.15s;
+    ">
+      <div style="font-size: 28px; margin-bottom: 6px;">📷</div>
+      <div style="font-size: 14px; font-weight: 600; color: var(--brand-dark);">Scan QR / Barcode</div>
+      <div style="font-size: 12px; color: var(--gray-600); margin-top: 3px;">Tap here and scan with device camera or ring scanner</div>
+      <input type="text" id="scan-input" autocomplete="off"
+        style="position:absolute;opacity:0;width:1px;height:1px;pointer-events:none;"
+        onkeydown="if(event.key==='Enter'){ document.getElementById('search-input').value=this.value; this.value=''; doSearch(); }"
+        oninput="handleScanInput(this)" />
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+      <div style="flex:1;height:1px;background:var(--purple-20);"></div>
+      <span style="font-size:12px;color:var(--neutral-40);font-weight:600;">OR SEARCH BY SKU</span>
+      <div style="flex:1;height:1px;background:var(--purple-20);"></div>
+    </div>
+
     <div class="search-bar-wrap">
-      <input type="text" id="search-input" placeholder="SKU or scan barcode..." autofocus autocomplete="off" onkeydown="if(event.key==='Enter') doSearch()" />
+      <input type="text" id="search-input" placeholder="Type partial SKU e.g. JRI033..." autofocus autocomplete="off" onkeydown="if(event.key==='Enter') doSearch()" />
       <button class="btn btn-primary" style="width:auto;min-width:80px;" onclick="doSearch()">
         <span id="search-btn-text">Search</span>
       </button>
@@ -795,6 +817,29 @@ function showFab() {
 // ═══════════════════════════════════════════════════
 // SEARCH
 // ═══════════════════════════════════════════════════
+function focusScanInput() {
+  var el = document.getElementById('scan-input');
+  el.focus();
+  document.getElementById('scan-zone').style.borderColor = 'var(--purple-100)';
+  document.getElementById('scan-zone').style.background  = 'var(--purple-20)';
+}
+
+var scanBuffer = ''; var scanTimer;
+function handleScanInput(el) {
+  // Scanners send full barcode rapidly — detect by speed
+  clearTimeout(scanTimer);
+  scanBuffer = el.value;
+  scanTimer = setTimeout(function() {
+    if (scanBuffer.length > 3) {
+      document.getElementById('search-input').value = scanBuffer;
+      el.value = ''; scanBuffer = '';
+      doSearch();
+    }
+    document.getElementById('scan-zone').style.borderColor = 'var(--purple-30)';
+    document.getElementById('scan-zone').style.background  = 'var(--purple-15)';
+  }, 150);
+}
+
 async function doSearch() {
   var q = (document.getElementById('search-input').value || '').trim();
   if (!q) return;
@@ -803,44 +848,59 @@ async function doSearch() {
   btn.innerHTML = '<span class="loading-spinner"></span>';
   res.innerHTML = '';
 
-  var product = null;
+  var products = [];
+  var scannedBarcode = null;
 
-  // Try SKU exact match
-  var r1 = await db.from('products').select('*').eq('sku', q).maybeSingle();
-  if (r1.data) { product = r1.data; }
+  // 1. Try barcode exact match first (scanner input)
+  var r2 = await db.from('barcodes').select('sku').eq('barcode', q).maybeSingle();
+  if (r2.data) {
+    var r3 = await db.from('products').select('*').eq('sku', r2.data.sku).maybeSingle();
+    if (r3.data) { scannedBarcode = q; products = [r3.data]; }
+  }
 
-  // Try barcode match → get SKU → get product
-  if (!product) {
-    var r2 = await db.from('barcodes').select('sku').eq('barcode', q).maybeSingle();
-    if (r2.data) {
-      var r3 = await db.from('products').select('*').eq('sku', r2.data.sku).maybeSingle();
-      if (r3.data) {
-        product = r3.data;
-        product._scannedBarcode = q; // pre-fill barcode selector
-      }
-    }
+  // 2. Partial SKU search (contains, case-insensitive)
+  if (!products.length) {
+    var r1 = await db.from('products').select('*').ilike('sku', '%' + q + '%').limit(20);
+    if (r1.data && r1.data.length) products = r1.data;
   }
 
   btn.textContent = 'Search';
 
-  if (!product) {
+  if (!products.length) {
     res.innerHTML = '<div class="empty-state"><div class="empty-icon">🔍</div>No product found for "' + q + '"</div>';
     return;
   }
 
-  // Show result card
-  var priceStr = '$' + (product.special_price || 0).toFixed(2);
-  var wasStr   = product.price && product.price > product.special_price ? '<span class="price-strike">$' + product.price.toFixed(2) + '</span>' : '';
-  res.innerHTML = '<div class="product-result-card" onclick="openPDP()">' +
-    '<div class="product-img-thumb">💎</div>' +
-    '<div class="product-result-info">' +
-      '<div class="product-result-name">' + (product.display_name || product.sku) + '</div>' +
-      '<div class="product-result-sku">' + product.sku + '</div>' +
-      '<div class="product-result-price"><span class="price-main">' + priceStr + '</span>' + wasStr + '</div>' +
-    '</div>' +
-    '<span style="color:var(--neutral-40);font-size:20px;">›</span>' +
-    '</div>';
-  currentProduct = product;
+  // If barcode scan matched exactly → go straight to PDP
+  if (scannedBarcode && products.length === 1) {
+    currentProduct = products[0];
+    currentProduct._scannedBarcode = scannedBarcode;
+    openPDP(); return;
+  }
+
+  // Show result list
+  res.innerHTML = (products.length > 1 ? '<div class="section-label" style="margin-bottom:10px;">' + products.length + ' results</div>' : '') +
+    products.map(function(p, idx) {
+      var priceStr = '$' + (p.special_price || 0).toFixed(2);
+      var wasStr   = p.price && p.price > p.special_price ? '<span class="price-strike">$' + p.price.toFixed(2) + '</span>' : '';
+      return '<div class="product-result-card" onclick="selectProduct(' + idx + ')">' +
+        '<div class="product-img-thumb">💎</div>' +
+        '<div class="product-result-info">' +
+          '<div class="product-result-name">' + (p.display_name || p.sku) + '</div>' +
+          '<div class="product-result-sku">' + p.sku + '</div>' +
+          '<div class="product-result-price"><span class="price-main">' + priceStr + '</span>' + wasStr + '</div>' +
+        '</div>' +
+        '<span style="color:var(--neutral-40);font-size:20px;">›</span>' +
+        '</div>';
+    }).join('');
+
+  window._searchResults = products;
+  if (products.length === 1) { currentProduct = products[0]; }
+}
+
+function selectProduct(idx) {
+  currentProduct = window._searchResults[idx];
+  openPDP();
 }
 
 // ═══════════════════════════════════════════════════
