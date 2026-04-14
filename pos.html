@@ -951,6 +951,13 @@ function addToCart() {
   doAddToCart();
 }
 
+function saveState() {
+  try {
+    localStorage.setItem('hm_cart', JSON.stringify(cart));
+    localStorage.setItem('hm_customer', JSON.stringify(customer));
+  } catch(e) {}
+}
+
 function doAddToCart() {
   var p = currentProduct;
   if (!p) return;
@@ -971,6 +978,7 @@ function doAddToCart() {
       isFree:      false
     });
   }
+  saveState();
   showToast('Added to cart', 'success');
   updateCartCount();
   setTimeout(function() { showScreen('cart'); renderCart(); }, 200);
@@ -1019,6 +1027,8 @@ function saveCustomer() {
   document.getElementById('customer-modal').classList.remove('open');
   var fab = document.getElementById('fab-customer');
   if (fab) fab.style.display = 'none';
+
+  saveState();
 
   if (pendingAddToCart) {
     pendingAddToCart = false;
@@ -1266,16 +1276,18 @@ function changeQty(idx, delta) {
   item.qty = newQty;
   while (item.barcodes.length < newQty) item.barcodes.push(null);
   while (item.barcodes.length > newQty) item.barcodes.pop();
+  saveState();
   renderCart();
 }
 
 function removeCartItem(idx) {
   cart.splice(idx, 1);
+  saveState();
   renderCart();
 }
 
 function setBarcodeForUnit(idx, unit, barcode) {
-  if (cart[idx]) cart[idx].barcodes[unit] = barcode;
+  if (cart[idx]) { cart[idx].barcodes[unit] = barcode; saveState(); }
 }
 
 function updateCartCount() {
@@ -1679,6 +1691,8 @@ function newOrder() {
   window._totals = null;
   currentOrderNo = null;
   lastOrderData  = null;
+  localStorage.removeItem('hm_cart');
+  localStorage.removeItem('hm_customer');
   document.getElementById('search-input').value = '';
   document.getElementById('search-results').innerHTML = '';
   document.getElementById('bday-input').value  = '';
@@ -1692,6 +1706,7 @@ function newOrder() {
 // INIT
 // ═══════════════════════════════════════════════════
 (function init() {
+  // Restore session
   var saved = localStorage.getItem('hm_session');
   if (saved) {
     try {
@@ -1700,9 +1715,25 @@ function newOrder() {
         session.storeSlug  = s.storeSlug;
         session.store      = STORES[s.storeSlug];
         session.consultant = s.consultant;
+
+        // Restore cart + customer across tabs/refreshes
+        try { var sc = localStorage.getItem('hm_cart');      if (sc) cart     = JSON.parse(sc); } catch(e) {}
+        try { var su = localStorage.getItem('hm_customer');  if (su) customer = JSON.parse(su); } catch(e) {}
+
         updateHeaderBadges();
         showFab();
-        showScreen('search');
+        updateCartCount();
+
+        // Handle ?scan=BARCODE from iOS Shortcut
+        var scanParam = new URLSearchParams(window.location.search).get('scan');
+        if (scanParam) {
+          history.replaceState(null, '', window.location.pathname);
+          document.getElementById('search-input').value = scanParam;
+          showScreen('search');
+          doSearch();
+        } else {
+          showScreen('search');
+        }
         return;
       }
     } catch(e) {}
