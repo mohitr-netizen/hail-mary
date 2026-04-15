@@ -1381,7 +1381,9 @@ function proceedToPayment() {
 }
 
 function renderPaymentSummary() {
+  if (!window._totals) recalcTotals();
   var t  = window._totals;
+  if (!t) return;
   var el = document.getElementById('pay-summary');
   var rows = '';
   cart.forEach(function(item) {
