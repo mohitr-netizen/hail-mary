@@ -907,8 +907,34 @@ async function doSearch() {
   var scannedBarcode = null;
 
   // 1. Try barcode exact match first (scanner input)
-  var r2 = await db.from('barcodes').select('sku').eq('barcode', q).maybeSingle();
+  var r2 = await db.from('barcodes').select('sku,status').eq('barcode', q).maybeSingle();
   if (r2.data) {
+    // Barcode found — check if already sold
+    if (r2.data.status === 'sold') {
+      btn.textContent = 'Search';
+      // Check if any other available barcode exists for this SKU
+      var altRes = await db.from('barcodes').select('barcode', { count: 'exact', head: true })
+        .eq('sku', r2.data.sku).eq('status', 'available').eq('store_slug', session.storeSlug || 'dallas');
+      var altCount = altRes.count || 0;
+      if (altCount > 0) {
+        // Other inventory exists — load product and show PDP with a nudge
+        var r3b = await db.from('products').select('*').eq('sku', r2.data.sku).maybeSingle();
+        if (r3b.data) {
+          currentProduct = r3b.data;
+          currentProduct._scannedBarcode = null; // don't pre-select the sold barcode
+          openPDP();
+          showToast('That specific piece is sold — ' + altCount + ' other available', 'error');
+        }
+      } else {
+        res.innerHTML = '<div class="empty-state">' +
+          '<div class="empty-icon">🚫</div>' +
+          '<div style="font-weight:700;font-size:15px;color:var(--brand-dark);margin-bottom:6px;">Already Sold</div>' +
+          '<div style="font-size:13px;color:var(--gray-600);">This piece has been sold and no other inventory is available.</div>' +
+          '</div>';
+      }
+      return;
+    }
+    // Available barcode — load product
     var r3 = await db.from('products').select('*').eq('sku', r2.data.sku).maybeSingle();
     if (r3.data) { scannedBarcode = q; products = [r3.data]; }
   }
@@ -926,11 +952,34 @@ async function doSearch() {
     return;
   }
 
-  // If barcode scan matched exactly → go straight to PDP
+  // For SKU results — check available inventory counts per SKU
+  var availMap = {};
+  var foundSkus = products.map(function(p) { return p.sku; });
+  var avRes = await db.from('barcodes').select('sku').in('sku', foundSkus)
+    .eq('status', 'available').eq('store_slug', session.storeSlug || 'dallas');
+  (avRes.data || []).forEach(function(b) { availMap[b.sku] = (availMap[b.sku] || 0) + 1; });
+
+  // Check which SKUs have any barcodes at all (to distinguish "no barcodes loaded" vs "all sold")
+  var trackedSkus = {};
+  var trRes = await db.from('barcodes').select('sku').in('sku', foundSkus)
+    .eq('store_slug', session.storeSlug || 'dallas');
+  (trRes.data || []).forEach(function(b) { trackedSkus[b.sku] = true; });
+
+  // If barcode scan matched exactly and piece is available → go straight to PDP
   if (scannedBarcode && products.length === 1) {
     currentProduct = products[0];
     currentProduct._scannedBarcode = scannedBarcode;
     openPDP(); return;
+  }
+
+  // If single SKU result with 0 available inventory → show sold-out nudge
+  if (products.length === 1 && trackedSkus[products[0].sku] && !availMap[products[0].sku]) {
+    res.innerHTML = '<div class="empty-state">' +
+      '<div class="empty-icon">🚫</div>' +
+      '<div style="font-weight:700;font-size:15px;color:var(--brand-dark);margin-bottom:6px;">No Inventory Available</div>' +
+      '<div style="font-size:13px;color:var(--gray-600);">All pieces for <strong>' + (products[0].display_name || products[0].sku) + '</strong> have been sold.</div>' +
+      '</div>';
+    return;
   }
 
   // Show result list
@@ -938,14 +987,16 @@ async function doSearch() {
     products.map(function(p, idx) {
       var priceStr = '$' + (p.special_price || 0).toFixed(2);
       var wasStr   = p.price && p.price > p.special_price ? '<span class="price-strike">$' + p.price.toFixed(2) + '</span>' : '';
-      return '<div class="product-result-card" onclick="selectProduct(' + idx + ')">' +
+      var isSoldOut = trackedSkus[p.sku] && !availMap[p.sku];
+      var soldTag  = isSoldOut ? '<span style="font-size:11px;font-weight:700;color:#DC2626;background:#FEF2F2;padding:2px 8px;border-radius:20px;margin-left:6px;">Sold Out</span>' : '';
+      return '<div class="product-result-card" onclick="' + (isSoldOut ? '' : 'selectProduct(' + idx + ')') + '" style="' + (isSoldOut ? 'opacity:0.6;cursor:not-allowed;' : '') + '">' +
         '<div class="product-img-thumb">💎</div>' +
         '<div class="product-result-info">' +
-          '<div class="product-result-name">' + (p.display_name || p.sku) + '</div>' +
+          '<div class="product-result-name">' + (p.display_name || p.sku) + soldTag + '</div>' +
           '<div class="product-result-sku">' + p.sku + '</div>' +
           '<div class="product-result-price"><span class="price-main">' + priceStr + '</span>' + wasStr + '</div>' +
         '</div>' +
-        '<span style="color:var(--neutral-40);font-size:20px;">›</span>' +
+        (isSoldOut ? '<span style="color:#DC2626;font-size:13px;font-weight:600;">🚫</span>' : '<span style="color:var(--neutral-40);font-size:20px;">›</span>') +
         '</div>';
     }).join('');
 
@@ -1117,13 +1168,22 @@ async function prefetchBarcodes() {
   window._barcodeCache = {};
   if (!nonCoins.length) return;
   var skus = Array.from(new Set(nonCoins.map(function(i) { return i.sku; })));
+  var storeSlug = session.storeSlug || 'dallas';
+
+  // Fetch available barcodes
   var res = await db.from('barcodes').select('barcode,sku')
-    .in('sku', skus)
-    .eq('store_slug', session.storeSlug || 'dallas')
-    .eq('status', 'available');
+    .in('sku', skus).eq('store_slug', storeSlug).eq('status', 'available');
   (res.data || []).forEach(function(b) {
     if (!window._barcodeCache[b.sku]) window._barcodeCache[b.sku] = [];
     window._barcodeCache[b.sku].push(b.barcode);
+  });
+
+  // Also track SKUs that have ANY barcodes (sold or available) — so we know when a SKU is sold out vs simply not barcoded
+  var allRes = await db.from('barcodes').select('sku').in('sku', skus).eq('store_slug', storeSlug);
+  (allRes.data || []).forEach(function(b) {
+    if (!Object.prototype.hasOwnProperty.call(window._barcodeCache, b.sku)) {
+      window._barcodeCache[b.sku] = []; // barcodes exist for this SKU but all are sold
+    }
   });
 }
 
@@ -1275,7 +1335,8 @@ function renderCartItem(item, idx) {
       '</div>'
     : (function() {
         var maxStock = ((window._barcodeCache || {})[item.sku] || []).length;
-        var atMax = maxStock > 0 && item.qty >= maxStock;
+        var barcodeTracked = Object.prototype.hasOwnProperty.call(window._barcodeCache || {}, item.sku);
+        var atMax = barcodeTracked && item.qty >= maxStock; // catches both qty=max and sold-out (maxStock=0)
         var plusStyle = 'width:28px;height:28px;border-radius:8px;border:1.5px solid ' +
           (atMax ? 'var(--gray-300)' : 'var(--purple-30)') +
           ';background:' + (atMax ? 'var(--gray-100)' : 'white') +
@@ -1286,7 +1347,7 @@ function renderCartItem(item, idx) {
           '<button onclick="changeQty(' + idx + ',-1)" style="width:28px;height:28px;border-radius:8px;border:1.5px solid var(--purple-30);background:white;color:var(--brand-dark);font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;">−</button>' +
           '<span style="font-size:15px;font-weight:700;color:var(--brand-dark);min-width:20px;text-align:center;">' + item.qty + '</span>' +
           '<button onclick="changeQty(' + idx + ',1)" ' + (atMax ? 'disabled ' : '') + 'style="' + plusStyle + '" title="' + (atMax ? 'Max stock reached' : 'Add unit') + '">+</button>' +
-          (atMax && maxStock > 0 ? '<span style="font-size:10px;color:var(--gray-500);margin-left:2px;">max</span>' : '') +
+          (atMax ? '<span style="font-size:10px;color:var(--gray-500);margin-left:2px;">' + (maxStock === 0 ? 'sold out' : 'max') + '</span>' : '') +
         '</div>';
       })();
 
