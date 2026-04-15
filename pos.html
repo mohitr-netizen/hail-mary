@@ -313,7 +313,7 @@
     .date-tile-value { font-size: 13px; font-weight: 600; color: var(--gray-400); }
     .date-tile.has-value .date-tile-value { color: var(--brand-dark); }
     .date-tile-discount { font-size: 10px; font-weight: 700; color: #16a34a; background: #dcfce7; border-radius: 20px; padding: 1px 7px; margin-left: auto; white-space: nowrap; }
-    .date-tile input[type="date"] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
+    .date-tile input[type="date"] { position: absolute; inset: 0; opacity: 0.001; width: 100%; height: 100%; cursor: pointer; z-index: 2; }
 
     /* ══════════════════════════════
        SCREEN 5 — PAYMENT
@@ -584,7 +584,7 @@
       <div class="section-label">Special Discounts</div>
       <div class="coin-promo" id="coin-promo-msg" style="display:none;"></div>
       <div class="discount-row">
-        <div class="date-tile" id="bday-tile">
+        <div class="date-tile" id="bday-tile" onclick="openDatePicker('bday-input')">
           <span class="date-tile-icon">🎂</span>
           <div>
             <div class="date-tile-label">Birthday DOB</div>
@@ -593,7 +593,7 @@
           <span class="date-tile-discount">−$10</span>
           <input type="date" id="bday-input" min="1900-01-01" max="2004-12-31" oninput="updateDateDisplay('bday')" />
         </div>
-        <div class="date-tile" id="anniv-tile">
+        <div class="date-tile" id="anniv-tile" onclick="openDatePicker('anniv-input')">
           <span class="date-tile-icon">💍</span>
           <div>
             <div class="date-tile-label">Anniversary</div>
@@ -1095,6 +1095,12 @@ async function prefetchBarcodes() {
   });
 }
 
+function openDatePicker(id) {
+  var el = document.getElementById(id);
+  if (!el) return;
+  try { el.showPicker(); } catch(e) { el.click(); }
+}
+
 function updateDateDisplay(type) {
   var input   = document.getElementById(type + '-input');
   var display = document.getElementById(type + '-display');
@@ -1537,8 +1543,9 @@ function renderInvoice(orderNo, order, items, cust, storeData, date) {
       '</tr>';
   }).join('');
 
-  var totalAmt = order.items_subtotal + order.gold_coin_value;
-  var discAmt  = order.birthday_discount + order.anniversary_discount + order.gold_coin_value;
+  var pt2      = window._totals || {};
+  var totalAmt = pt2.totalMRP != null ? pt2.totalMRP : (order.items_subtotal + order.gold_coin_value);
+  var productDisc = pt2.productDiscount || 0;
 
   document.getElementById('invoice-print').innerHTML = `
     <div class="inv-header">
