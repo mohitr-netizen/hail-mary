@@ -306,9 +306,14 @@
 
     /* Discount date inputs */
     .discount-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 12px 0; }
-    .discount-field { background: white; border-radius: 10px; padding: 10px 12px; border: 1.5px solid var(--purple-30); }
-    .discount-field label { font-size: 11px; font-weight: 600; color: var(--gray-600); margin-bottom: 4px; }
-    .discount-field input { height: 32px; font-size: 13px; background: transparent; border: none; padding: 0; }
+    .date-tile { position: relative; display: flex; align-items: center; gap: 10px; background: white; border: 1.5px solid var(--purple-30); border-radius: 12px; padding: 11px 13px; cursor: pointer; transition: border-color 0.15s; }
+    .date-tile.has-value { border-color: var(--purple-100); background: var(--purple-15); }
+    .date-tile-icon { font-size: 20px; flex-shrink: 0; }
+    .date-tile-label { font-size: 10px; font-weight: 600; color: var(--gray-600); text-transform: uppercase; letter-spacing: 0.3px; margin-bottom: 2px; }
+    .date-tile-value { font-size: 13px; font-weight: 600; color: var(--gray-400); }
+    .date-tile.has-value .date-tile-value { color: var(--brand-dark); }
+    .date-tile-discount { font-size: 10px; font-weight: 700; color: #16a34a; background: #dcfce7; border-radius: 20px; padding: 1px 7px; margin-left: auto; white-space: nowrap; }
+    .date-tile input[type="date"] { position: absolute; inset: 0; opacity: 0; width: 100%; height: 100%; cursor: pointer; }
 
     /* ══════════════════════════════
        SCREEN 5 — PAYMENT
@@ -418,7 +423,7 @@
     }
     .customer-pill-name { font-size: 14px; font-weight: 600; color: var(--brand-dark); }
     .customer-pill-email { font-size: 12px; color: var(--gray-600); }
-    .customer-pill-edit { margin-left: auto; font-size: 13px; color: var(--purple-100); cursor: pointer; font-weight: 600; }
+    .customer-pill-edit { margin-left: auto; font-size: 12px; color: var(--purple-100); cursor: pointer; font-weight: 600; border: 1.5px solid var(--purple-30); border-radius: 8px; padding: 4px 12px; background: white; white-space: nowrap; }
 
     .loading-spinner {
       display: inline-block; width: 18px; height: 18px;
@@ -496,7 +501,7 @@
     </div>
     <div class="header-right">
       <span class="header-consultant" id="header-consultant-name"></span>
-      <button onclick="addMoreItem()" style="background:none;border:none;cursor:pointer;font-size:18px;" title="Cart">🛒</button>
+      <button onclick="goToCartOrSearch()" style="background:none;border:none;cursor:pointer;font-size:18px;" title="Cart">🛒</button>
       <span class="cart-count-badge" id="cart-count" style="display:none">0</span>
     </div>
   </div>
@@ -579,16 +584,26 @@
       <div class="section-label">Special Discounts</div>
       <div class="coin-promo" id="coin-promo-msg" style="display:none;"></div>
       <div class="discount-row">
-        <div class="discount-field">
-          <label>🎂 Birthday <span class="optional">(−$10)</span></label>
-          <input type="date" id="bday-input" min="1900-01-01" max="2004-12-31" oninput="recalcTotals()" />
+        <div class="date-tile" id="bday-tile">
+          <span class="date-tile-icon">🎂</span>
+          <div>
+            <div class="date-tile-label">Birthday DOB</div>
+            <div class="date-tile-value" id="bday-display">Tap to select</div>
+          </div>
+          <span class="date-tile-discount">−$10</span>
+          <input type="date" id="bday-input" min="1900-01-01" max="2004-12-31" oninput="updateDateDisplay('bday')" />
         </div>
-        <div class="discount-field">
-          <label>💍 Anniversary <span class="optional">(−$10)</span></label>
-          <input type="date" id="anniv-input" min="1900-01-01" max="2025-12-31" oninput="recalcTotals()" />
+        <div class="date-tile" id="anniv-tile">
+          <span class="date-tile-icon">💍</span>
+          <div>
+            <div class="date-tile-label">Anniversary</div>
+            <div class="date-tile-value" id="anniv-display">Tap to select</div>
+          </div>
+          <span class="date-tile-discount">−$10</span>
+          <input type="date" id="anniv-input" min="1900-01-01" max="2025-12-31" oninput="updateDateDisplay('anniv')" />
         </div>
       </div>
-      <div class="field-hint">Birthday: enter customer's DOB (born before 2004). Anniversary: any past date. Each gives $10 off.</div>
+      <div class="field-hint">Birthday: customer DOB (born 2004 or earlier). Anniversary: any past date. Each gives $10 off.</div>
       <div id="savings-nudge" style="display:none;margin-top:10px;background:linear-gradient(135deg,#F0FDF4,#DCFCE7);border:1.5px solid #86EFAC;border-radius:10px;padding:10px 14px;font-size:13px;font-weight:600;color:#15803D;"></div>
     </div>
 
@@ -668,7 +683,7 @@
     <div class="invoice-success">
       <div class="invoice-success-icon">✅</div>
       <div class="invoice-success-title" id="inv-success-order"></div>
-      <div class="invoice-success-sub">Order confirmed. Invoice ready below.</div>
+      <div class="invoice-success-sub">Order confirmed. Order Receipt ready below.</div>
       <div class="btn-row" style="max-width:400px;margin:0 auto;">
         <button class="btn btn-secondary" onclick="window.print()">🖨 Print</button>
         <button class="btn btn-primary" onclick="downloadPDF()">⬇ Download PDF</button>
@@ -854,7 +869,7 @@ async function doSearch() {
   var btn  = document.getElementById('search-btn-text');
   var res  = document.getElementById('search-results');
   btn.innerHTML = '<span class="loading-spinner"></span>';
-  res.innerHTML = '';
+  res.innerHTML = '<div class="empty-state" style="padding:24px 0;"><span class="loading-spinner" style="width:24px;height:24px;margin:0 auto;display:block;border-width:3px;"></span><div style="margin-top:10px;color:var(--gray-600);font-size:13px;">Looking up product…</div></div>';
 
   var products = [];
   var scannedBarcode = null;
@@ -971,6 +986,7 @@ function doAddToCart() {
     cart.push({
       sku:         p.sku,
       displayName: p.display_name || p.sku,
+      mrp:         p.price || p.special_price || 0,
       price:       p.special_price || 0,
       qty:         1,
       barcodes:    [p._scannedBarcode || null],
@@ -981,13 +997,20 @@ function doAddToCart() {
   saveState();
   showToast('Added to cart', 'success');
   updateCartCount();
-  setTimeout(function() { showScreen('cart'); renderCart(); }, 200);
+  showScreen('cart');
+  document.getElementById('cart-items-list').innerHTML = '<div class="empty-state" style="padding:32px 0;"><span class="loading-spinner" style="width:24px;height:24px;margin:0 auto;display:block;border-width:3px;"></span><div style="margin-top:10px;color:var(--gray-600);font-size:13px;">Loading cart…</div></div>';
+  renderCart();
 }
 
 function addMoreItem() {
   document.getElementById('search-input').value = '';
   document.getElementById('search-results').innerHTML = '';
   showScreen('search');
+}
+
+function goToCartOrSearch() {
+  var count = cart.filter(function(i) { return !i.isGoldCoin; }).reduce(function(s, i) { return s + i.qty; }, 0);
+  if (count > 0) { showScreen('cart'); renderCart(); }
 }
 
 // ═══════════════════════════════════════════════════
@@ -1072,6 +1095,23 @@ async function prefetchBarcodes() {
   });
 }
 
+function updateDateDisplay(type) {
+  var input   = document.getElementById(type + '-input');
+  var display = document.getElementById(type + '-display');
+  var tile    = document.getElementById(type + '-tile');
+  if (!input || !display) return;
+  if (input.value) {
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var p = input.value.split('-');
+    display.textContent = p[2] + '-' + months[parseInt(p[1], 10) - 1] + '-' + p[0];
+    if (tile) tile.classList.add('has-value');
+  } else {
+    display.textContent = 'Tap to select';
+    if (tile) tile.classList.remove('has-value');
+  }
+  recalcTotals();
+}
+
 function recalcTotals() {
   // Calc subtotal (non-coin items only)
   var nonCoins = cart.filter(function(i) { return !i.isGoldCoin; });
@@ -1092,7 +1132,7 @@ function recalcTotals() {
     if (coinRow) {
       coinRow.qty = coinsNeeded;
     } else {
-      cart.push({ sku: GOLD_COIN_SKU, displayName: '0.20g Gold Coin', price: GOLD_COIN_PRICE, qty: coinsNeeded, barcodes: [], isGoldCoin: true, isFree: true });
+      cart.push({ sku: GOLD_COIN_SKU, displayName: '0.20g Gold Coin', mrp: GOLD_COIN_PRICE, price: 0, qty: coinsNeeded, barcodes: [], isGoldCoin: true, isFree: true });
     }
   } else {
     cart = cart.filter(function(i) { return !i.isGoldCoin; });
@@ -1118,22 +1158,6 @@ function recalcTotals() {
     }
   }
 
-  // Savings nudge
-  var nudgeEl = document.getElementById('savings-nudge');
-  if (nudgeEl) {
-    var totalSaved = bdayDisc + annivDisc + coinValue;
-    if (totalSaved > 0 && subtotal > 0) {
-      nudgeEl.style.display = 'block';
-      var parts = [];
-      if (bdayDisc)   parts.push('$' + bdayDisc + ' birthday');
-      if (annivDisc)  parts.push('$' + annivDisc + ' anniversary');
-      if (coinValue)  parts.push('$' + coinValue.toFixed(0) + ' in gold coins');
-      nudgeEl.textContent = '✓ Customer saves $' + totalSaved.toFixed(2) + ' today — ' + parts.join(' + ');
-    } else {
-      nudgeEl.style.display = 'none';
-    }
-  }
-
   // Render items — gold coin always last
   var sortedCart = cart.filter(function(i) { return !i.isGoldCoin; }).concat(cart.filter(function(i) { return i.isGoldCoin; }));
   var listEl = document.getElementById('cart-items-list');
@@ -1146,17 +1170,41 @@ function recalcTotals() {
       }).join('');
   }
 
+  // MRP-based totals
+  var totalMRP       = nonCoins.reduce(function(s, i) { return s + ((i.mrp || i.price) * i.qty); }, 0) + coinsNeeded * GOLD_COIN_PRICE;
+  var productDiscount = totalMRP - subtotal;  // includes gold coin MRP (since selling price = 0)
+  var totalDiscount  = productDiscount + bdayDisc + annivDisc;
+
   // Totals panel
   var totalsEl = document.getElementById('totals-panel');
   if (totalsEl) {
-    var totalDisplay = subtotal + coinValue;
-    var discountDisplay = bdayDisc + annivDisc + coinValue;
-    totalsEl.innerHTML =
-      '<div class="totals-row"><span class="totals-label">Total Amount</span><span class="totals-val">$' + totalDisplay.toFixed(2) + '</span></div>' +
-      (discountDisplay > 0 ? '<div class="totals-row"><span class="totals-label totals-discount">Less: Discount</span><span class="totals-val totals-discount">−$' + discountDisplay.toFixed(2) + '</span></div>' : '') +
-      '<div class="totals-row"><span class="totals-label">Total Pre Tax</span><span class="totals-val">$' + postDiscount.toFixed(2) + '</span></div>' +
-      '<div class="totals-row"><span class="totals-label">Sales Tax (' + (taxRate * 100).toFixed(3).replace(/\.?0+$/, '') + '%)</span><span class="totals-val">$' + taxAmt.toFixed(2) + '</span></div>' +
-      '<div class="totals-row total"><span class="totals-label">Invoice Total</span><span class="totals-val">$' + invoiceTotal.toFixed(2) + '</span></div>';
+    var rows = '<div class="totals-row"><span class="totals-label">Total MRP</span><span class="totals-val">$' + totalMRP.toFixed(2) + '</span></div>';
+    if (productDiscount > 0)
+      rows += '<div class="totals-row"><span class="totals-label totals-discount">Less: Product Savings</span><span class="totals-val totals-discount">−$' + productDiscount.toFixed(2) + '</span></div>';
+    rows += '<div class="totals-row"><span class="totals-label">Subtotal</span><span class="totals-val">$' + subtotal.toFixed(2) + '</span></div>';
+    if (bdayDisc)
+      rows += '<div class="totals-row"><span class="totals-label totals-discount">Less: Birthday</span><span class="totals-val totals-discount">−$' + bdayDisc.toFixed(2) + '</span></div>';
+    if (annivDisc)
+      rows += '<div class="totals-row"><span class="totals-label totals-discount">Less: Anniversary</span><span class="totals-val totals-discount">−$' + annivDisc.toFixed(2) + '</span></div>';
+    rows += '<div class="totals-row"><span class="totals-label">Pre-tax Total</span><span class="totals-val">$' + postDiscount.toFixed(2) + '</span></div>';
+    rows += '<div class="totals-row"><span class="totals-label">Sales Tax (' + (taxRate * 100).toFixed(3).replace(/\.?0+$/, '') + '%)</span><span class="totals-val">$' + taxAmt.toFixed(2) + '</span></div>';
+    rows += '<div class="totals-row total"><span class="totals-label">Invoice Total</span><span class="totals-val">$' + invoiceTotal.toFixed(2) + '</span></div>';
+    totalsEl.innerHTML = rows;
+  }
+
+  // Savings nudge update — use totalDiscount
+  var nudgeEl2 = document.getElementById('savings-nudge');
+  if (nudgeEl2 && subtotal > 0) {
+    if (totalDiscount > 0) {
+      nudgeEl2.style.display = 'block';
+      var parts2 = [];
+      if (productDiscount > 0) parts2.push('$' + productDiscount.toFixed(0) + ' product savings');
+      if (bdayDisc)            parts2.push('$' + bdayDisc + ' birthday');
+      if (annivDisc)           parts2.push('$' + annivDisc + ' anniversary');
+      nudgeEl2.textContent = '✓ Customer saves $' + totalDiscount.toFixed(2) + ' — ' + parts2.join(' + ');
+    } else {
+      nudgeEl2.style.display = 'none';
+    }
   }
 
   // Format dates for invoice (YYYY-MM-DD → DD-MMM-YYYY)
@@ -1170,7 +1218,7 @@ function recalcTotals() {
   var annivDisplay = fmtDate(annivVal);
 
   // Store for payment screen
-  window._totals = { subtotal, bdayDisc, annivDisc, postDiscount, coinsNeeded, coinValue, taxRate, taxAmt, invoiceTotal, bdayVal: bdayDisplay, annivVal: annivDisplay };
+  window._totals = { subtotal, totalMRP, productDiscount, totalDiscount, bdayDisc, annivDisc, postDiscount, coinsNeeded, coinValue, taxRate, taxAmt, invoiceTotal, bdayVal: bdayDisplay, annivVal: annivDisplay };
 }
 
 function renderCartItem(item, idx) {
@@ -1553,8 +1601,10 @@ function renderInvoice(orderNo, order, items, cust, storeData, date) {
 
     <div class="inv-totals">
       <div class="inv-totals-box">
-        <div class="inv-totals-row"><span>Total Amount:</span><span>$${totalAmt.toFixed(2)}</span></div>
-        ${discAmt > 0 ? '<div class="inv-totals-row"><span>Less: Discount:</span><span>$' + discAmt.toFixed(2) + '</span></div>' : ''}
+        <div class="inv-totals-row"><span>Total MRP:</span><span>$${totalAmt.toFixed(2)}</span></div>
+        ${productDisc > 0 ? '<div class="inv-totals-row"><span>Less: Product Savings:</span><span>−$' + productDisc.toFixed(2) + '</span></div>' : ''}
+        ${order.birthday_discount > 0 ? '<div class="inv-totals-row"><span>Less: Birthday:</span><span>−$' + order.birthday_discount.toFixed(2) + '</span></div>' : ''}
+        ${order.anniversary_discount > 0 ? '<div class="inv-totals-row"><span>Less: Anniversary:</span><span>−$' + order.anniversary_discount.toFixed(2) + '</span></div>' : ''}
         <div class="inv-totals-row"><span>Total Pre Tax Amount:</span><span>$${order.post_discount_subtotal.toFixed(2)}</span></div>
         <div class="inv-totals-row"><span>Sales Tax:</span><span>$${order.tax_amount.toFixed(2)}</span></div>
         <div class="inv-totals-row bold"><span>Invoice Amount:</span><span>$${order.invoice_total.toFixed(2)}</span></div>
@@ -1562,12 +1612,15 @@ function renderInvoice(orderNo, order, items, cust, storeData, date) {
     </div>
 
     <div class="inv-footer">
+      <strong style="color:#15803D;">📧 An e-invoice with Certificate of Authenticity will be sent to ${cust.email} within 24 hours.</strong>
+    </div>
+    <div class="inv-footer" style="margin-top:8px;">
       <strong>Terms and Conditions:</strong><br/>
       (i) All disputes are subject to "New York" jurisdiction only<br/>
       (ii) All terms, conditions and policies prevailing on the website are applicable
     </div>
     <div class="inv-footer-center">
-      <strong>This is an e-invoice and does not require signature</strong><br/>
+      <strong>This is an Order Receipt and does not require signature</strong><br/>
       Customer Care Phone: +1 (844) 922-2728 &nbsp;|&nbsp; Customer Care Email: contactus@caratlane.us &nbsp;|&nbsp; Website: www.caratlane.us
     </div>
     <div style="margin-top:16px;font-size:10px;color:#999;text-align:center;">${invoiceNo} &nbsp;·&nbsp; 1 of 1</div>
@@ -1645,14 +1698,15 @@ function downloadPDF() {
   });
 
   var y = doc.lastAutoTable.finalY + 6;
-  var totalAmt = order.items_subtotal + order.gold_coin_value;
-  var discAmt  = order.birthday_discount + order.anniversary_discount + order.gold_coin_value;
+  var pt = window._totals || {};
+  var pdfTotalMRP = pt.totalMRP != null ? pt.totalMRP : (order.items_subtotal + order.gold_coin_value);
+  var pdfProdDisc = pt.productDiscount || 0;
 
   // Totals
-  var totals = [
-    ['Total Amount:', '$' + totalAmt.toFixed(2)]
-  ];
-  if (discAmt > 0) totals.push(['Less: Discount:', '$' + discAmt.toFixed(2)]);
+  var totals = [['Total MRP:', '$' + pdfTotalMRP.toFixed(2)]];
+  if (pdfProdDisc > 0) totals.push(['Less: Product Savings:', '−$' + pdfProdDisc.toFixed(2)]);
+  if (order.birthday_discount > 0) totals.push(['Less: Birthday:', '−$' + order.birthday_discount.toFixed(2)]);
+  if (order.anniversary_discount > 0) totals.push(['Less: Anniversary:', '−$' + order.anniversary_discount.toFixed(2)]);
   totals.push(['Total Pre Tax Amount:', '$' + order.post_discount_subtotal.toFixed(2)]);
   totals.push(['Sales Tax:', '$' + order.tax_amount.toFixed(2)]);
   totals.push(['Invoice Amount:', '$' + order.invoice_total.toFixed(2)]);
@@ -1668,15 +1722,19 @@ function downloadPDF() {
 
   y = doc.lastAutoTable.finalY + 10;
   doc.setFontSize(8);
-  doc.setFont(undefined, 'bold'); doc.text('Terms and Conditions:', margin, y);
+  doc.setTextColor(22, 163, 74);
+  doc.setFont(undefined, 'bold');
+  doc.text('An e-invoice with Certificate of Authenticity will be sent to ' + cust.email + ' within 24 hours.', margin, y);
+  doc.setTextColor(0, 0, 0);
+  doc.setFont(undefined, 'bold'); doc.text('Terms and Conditions:', margin, y + 6);
   doc.setFont(undefined, 'normal');
-  doc.text('(i) All disputes are subject to "New York" jurisdiction only', margin, y + 4);
-  doc.text('(ii) All terms, conditions and policies prevailing on the website are applicable', margin, y + 8);
+  doc.text('(i) All disputes are subject to "New York" jurisdiction only', margin, y + 10);
+  doc.text('(ii) All terms, conditions and policies prevailing on the website are applicable', margin, y + 14);
 
   doc.setFont(undefined, 'bold');
-  doc.text('This is an e-invoice and does not require signature', pageW / 2, y + 16, { align: 'center' });
+  doc.text('This is an Order Receipt and does not require signature', pageW / 2, y + 22, { align: 'center' });
   doc.setFont(undefined, 'normal');
-  doc.text('Customer Care: +1 (844) 922-2728  |  contactus@caratlane.us  |  www.caratlane.us', pageW / 2, y + 20, { align: 'center' });
+  doc.text('Customer Care: +1 (844) 922-2728  |  contactus@caratlane.us  |  www.caratlane.us', pageW / 2, y + 26, { align: 'center' });
 
   doc.save(invoiceNo + '.pdf');
 }
@@ -1697,6 +1755,10 @@ function newOrder() {
   document.getElementById('search-results').innerHTML = '';
   document.getElementById('bday-input').value  = '';
   document.getElementById('anniv-input').value = '';
+  document.getElementById('bday-display').textContent  = 'Tap to select';
+  document.getElementById('anniv-display').textContent = 'Tap to select';
+  document.getElementById('bday-tile').classList.remove('has-value');
+  document.getElementById('anniv-tile').classList.remove('has-value');
   var fab = document.getElementById('fab-customer');
   if (fab) fab.style.display = 'flex';
   showScreen('search');
