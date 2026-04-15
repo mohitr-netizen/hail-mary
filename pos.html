@@ -10,6 +10,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <style>
     /* ── Design System Tokens ── */
     :root {
@@ -318,7 +319,16 @@
     /* ══════════════════════════════
        SCREEN 5 — PAYMENT
     ══════════════════════════════ */
-    .payment-toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+    .payment-toggle { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 20px; }
+
+    /* QR Payment Panel */
+    .qr-panel { display: none; margin-top: 4px; }
+    .qr-panel.active { display: block; }
+    .qr-amount-label { font-size: 22px; font-weight: 800; color: var(--brand-dark); text-align: center; margin-bottom: 12px; }
+    .qr-canvas-wrap { display: none; text-align: center; margin-bottom: 12px; }
+    .qr-canvas-wrap > div { display: inline-block; padding: 14px; background: white; border-radius: 14px; border: 2px solid var(--purple-30); }
+    .qr-waiting { display: none; align-items: center; justify-content: center; gap: 8px; font-size: 13px; color: var(--gray-600); margin-bottom: 12px; }
+    .qr-generate-btn { width: 100%; }
     .payment-opt {
       border: 2px solid var(--purple-30); border-radius: 14px;
       padding: 18px 14px; text-align: center; cursor: pointer;
@@ -456,6 +466,7 @@
 <script>
   var SUPABASE_URL = 'https://euomgzjrgbyvyapehjub.supabase.co';
   var SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImV1b21nempyZ2J5dnlhcGVoanViIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzYwODg1MDIsImV4cCI6MjA5MTY2NDUwMn0.P2X5Mtw7xtZMi7hXM1EWX1rTaEpFRP4u549XGeEP5zc';
+  var EDGE_BASE    = SUPABASE_URL + '/functions/v1';
   var db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 </script>
 
@@ -626,7 +637,7 @@
     </div>
   </div>
   <div class="page-body">
-    <button class="back-btn" onclick="showScreen('cart')">← Back to Cart</button>
+    <button class="back-btn" onclick="stopQRPolling(); showScreen('cart')">← Back to Cart</button>
     <div class="card-title">Payment</div>
 
     <!-- Order summary -->
@@ -647,7 +658,12 @@
           <span class="payment-icon">💳</span>
           <div class="payment-label">Card (Swipe)</div>
         </div>
+        <div class="payment-opt" id="opt-qr" onclick="selectPayment('qr')">
+          <span class="payment-icon">📱</span>
+          <div class="payment-label">QR / Digital</div>
+        </div>
       </div>
+      <!-- Card fields (cash/card mode) -->
       <div id="card-fields" style="display:none;">
         <div class="form-row">
           <div class="form-group">
@@ -659,6 +675,19 @@
             <input type="text" id="card-auth" placeholder="ABC123" />
           </div>
         </div>
+      </div>
+      <!-- QR panel (qr mode) -->
+      <div class="qr-panel" id="qr-panel">
+        <div class="qr-amount-label" id="qr-amount-display"></div>
+        <div class="qr-canvas-wrap" id="qr-canvas-wrap">
+          <div id="qr-code-div"></div>
+        </div>
+        <div class="qr-waiting" id="qr-waiting-msg">
+          <span class="loading-spinner"></span> Waiting for customer payment...
+        </div>
+        <button class="btn btn-primary qr-generate-btn" id="qr-generate-btn" onclick="generateQR()">
+          Generate QR Code
+        </button>
       </div>
     </div>
 
@@ -772,6 +801,9 @@ var pendingAddToCart = false; // waiting for customer before add
 var paymentMethod  = 'cash';
 var currentOrderNo = null;
 var lastOrderData  = null;
+var qrPollingTimer = null;   // setInterval handle for payment status polling
+var qrSessionId    = null;   // active Stripe Checkout Session ID
+var qrOrderRef     = null;   // temp order ref for correlation
 
 // ═══════════════════════════════════════════════════
 // SCREEN ROUTING
@@ -1402,16 +1434,125 @@ function selectPayment(method) {
   paymentMethod = method;
   document.getElementById('opt-cash').classList.toggle('selected', method === 'cash');
   document.getElementById('opt-card').classList.toggle('selected', method === 'card');
+  document.getElementById('opt-qr').classList.toggle('selected', method === 'qr');
   document.getElementById('card-fields').style.display = method === 'card' ? 'block' : 'none';
+  document.getElementById('qr-panel').classList.toggle('active', method === 'qr');
+  document.getElementById('place-order-btn').style.display = method === 'qr' ? 'none' : '';
+
+  // Stop any active QR polling when switching away
+  if (method !== 'qr') stopQRPolling();
+
+  // Show invoice amount in QR panel header
+  if (method === 'qr' && window._totals) {
+    document.getElementById('qr-amount-display').textContent = '$' + window._totals.invoiceTotal.toFixed(2);
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// QR / DIGITAL PAYMENT
+// ═══════════════════════════════════════════════════
+async function generateQR() {
+  if (!window._totals) { showToast('No order total — go back to cart', 'error'); return; }
+
+  var btn = document.getElementById('qr-generate-btn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="loading-spinner"></span> Creating session...';
+
+  stopQRPolling(); // clear any existing poll
+
+  // Unique temp ref for this QR attempt
+  qrOrderRef = 'QR-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7).toUpperCase();
+
+  try {
+    var resp = await fetch(EDGE_BASE + '/create-stripe-session', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + SUPABASE_KEY,
+        'apikey': SUPABASE_KEY,
+      },
+      body: JSON.stringify({
+        order_amount: window._totals.invoiceTotal,
+        order_ref:    qrOrderRef,
+        store_slug:   session.storeSlug,
+      }),
+    });
+
+    if (!resp.ok) {
+      var errData = await resp.json().catch(function() { return {}; });
+      throw new Error(errData.error || 'Server error ' + resp.status);
+    }
+
+    var data = await resp.json();
+    qrSessionId = data.session_id;
+
+    // Render QR code
+    var qrDiv = document.getElementById('qr-code-div');
+    qrDiv.innerHTML = '';
+    new QRCode(qrDiv, { text: data.url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+
+    document.getElementById('qr-canvas-wrap').style.display = 'block';
+    document.getElementById('qr-waiting-msg').style.display = 'flex';
+    btn.style.display = 'none';
+
+    startQRPolling();
+
+  } catch (err) {
+    showToast('QR error: ' + err.message, 'error');
+    btn.disabled = false;
+    btn.innerHTML = 'Generate QR Code';
+  }
+}
+
+function startQRPolling() {
+  if (qrPollingTimer) clearInterval(qrPollingTimer);
+  qrPollingTimer = setInterval(checkQRPaymentStatus, 3000);
+}
+
+function stopQRPolling() {
+  if (qrPollingTimer) { clearInterval(qrPollingTimer); qrPollingTimer = null; }
+  qrSessionId = null;
+  qrOrderRef  = null;
+  // Reset QR UI
+  var btn = document.getElementById('qr-generate-btn');
+  if (btn) { btn.style.display = ''; btn.disabled = false; btn.innerHTML = 'Generate QR Code'; }
+  var cw = document.getElementById('qr-canvas-wrap');
+  if (cw) cw.style.display = 'none';
+  var wm = document.getElementById('qr-waiting-msg');
+  if (wm) wm.style.display = 'none';
+}
+
+async function checkQRPaymentStatus() {
+  if (!qrSessionId) return;
+  try {
+    var res = await db.from('hm_payment_sessions').select('status').eq('session_id', qrSessionId).single();
+    if (!res.data) return;
+
+    if (res.data.status === 'paid') {
+      stopQRPolling();
+      showToast('Payment received! Completing order...', 'success');
+      await placeOrder(qrSessionId);
+
+    } else if (res.data.status === 'expired') {
+      stopQRPolling();
+      showToast('QR session expired — generate a new code', 'error');
+      var btn = document.getElementById('qr-generate-btn');
+      if (btn) { btn.style.display = ''; btn.disabled = false; btn.innerHTML = 'Generate New QR'; }
+    }
+  } catch (err) {
+    // Transient error — keep polling silently
+  }
 }
 
 // ═══════════════════════════════════════════════════
 // PLACE ORDER
 // ═══════════════════════════════════════════════════
-async function placeOrder() {
+async function placeOrder(stripeRef) {
+  // For QR payments, the place-order-btn is hidden — show a toast spinner instead
   var btn = document.getElementById('place-order-text');
-  btn.innerHTML = '<span class="loading-spinner"></span> Processing...';
-  document.getElementById('place-order-btn').disabled = true;
+  if (btn) { btn.innerHTML = '<span class="loading-spinner"></span> Processing...'; }
+  var poBtn = document.getElementById('place-order-btn');
+  if (poBtn) poBtn.disabled = true;
 
   try {
     // Generate order number: HM-YYYYMMDD-NNNN
@@ -1431,6 +1572,8 @@ async function placeOrder() {
       var l4   = (document.getElementById('card-last4').value || '').trim();
       var auth = (document.getElementById('card-auth').value  || '').trim();
       payRef = l4 ? 'LAST4:' + l4 + (auth ? ' AUTH:' + auth : '') : auth;
+    } else if (paymentMethod === 'qr') {
+      payRef = stripeRef || qrSessionId || null;
     }
 
     var storeData = session.store;
@@ -1457,6 +1600,7 @@ async function placeOrder() {
       invoice_total:         t.invoiceTotal,
       payment_method:        paymentMethod,
       payment_ref:           payRef,
+      stripe_session_id:     paymentMethod === 'qr' ? (stripeRef || qrSessionId || null) : null,
       birthday_date:         t.bdayVal || null,
       anniversary_date:      t.annivVal || null,
       status:                'confirmed'
@@ -1520,8 +1664,9 @@ async function placeOrder() {
 
   } catch (err) {
     showToast('Error: ' + err.message, 'error');
-    btn.textContent = 'Place Order';
-    document.getElementById('place-order-btn').disabled = false;
+    if (btn) btn.textContent = 'Place Order';
+    var poBtn2 = document.getElementById('place-order-btn');
+    if (poBtn2) poBtn2.disabled = false;
   }
 }
 
@@ -1795,13 +1940,20 @@ function newOrder() {
         showFab();
         updateCartCount();
 
-        // Handle ?scan=BARCODE from iOS Shortcut
-        var scanParam = new URLSearchParams(window.location.search).get('scan');
+        // Handle URL params
+        var initParams = new URLSearchParams(window.location.search);
+        var scanParam      = initParams.get('scan');
+        var stripeCancelled = initParams.get('stripe_cancelled');
+
         if (scanParam) {
           history.replaceState(null, '', window.location.pathname);
           document.getElementById('search-input').value = scanParam;
           showScreen('search');
           doSearch();
+        } else if (stripeCancelled) {
+          history.replaceState(null, '', window.location.pathname);
+          showScreen('search');
+          setTimeout(function() { showToast('Payment cancelled by customer — QR can be regenerated', 'error'); }, 400);
         } else {
           showScreen('search');
         }
